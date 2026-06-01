@@ -1,5 +1,7 @@
 # TapTapLoot — Memory Leak Investigation
 
+> This analysis was produced with the assistance of **Claude Code** (Anthropic).
+
 **Date:** 2026-06-01
 **Investigator notes:** read-only analysis. The original Steam install and save data were **not** modified.
 

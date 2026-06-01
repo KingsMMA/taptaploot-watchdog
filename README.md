@@ -7,6 +7,29 @@ gracefully first, so saves and Steam Cloud sync normally.
 
 Watches both **Tap Tap Loot** (`appid 3959890`) and **Bongo Cat** (`appid 3419430`).
 
+## Why this exists
+
+Tap Tap Loot leaks memory the longer it runs. The cause is in its buff system
+(`BongoCatBuffSystem`): buffs are applied as runtime `ScriptableObject` effects,
+but the "remove buff" path builds a *brand-new* object to look up what to remove.
+Because those objects compare by reference, the lookup never matches — so:
+
+- buffs are **never actually removed** (they pile up on the player),
+- the internal effect list/dictionary **grows without bound**, and
+- each update **orphans more `ScriptableObject`s**, which Unity does not
+  garbage-collect on their own.
+
+This is driven on a loop by the Bongo Cat buff feed, so memory climbs steadily
+during a long session and the game gets slower over time. It's a bug in the game
+that only the developers can fix in source.
+
+This helper can't patch the game, so it does the next best thing: it gives the
+process a **clean slate on a schedule**. Periodically restarting the game frees
+the accumulated objects and resets memory back to baseline — keeping it playable
+during long idle sessions. It restarts *through Steam* and closes the game
+gracefully first specifically so your progress and Steam Cloud saves are
+preserved. (Full technical write-up: [`MEMORY_LEAK_REPORT.md`](MEMORY_LEAK_REPORT.md).)
+
 ## Install
 
 **Easiest (single file):** download **`Install-TapTapLootWatchdog.bat`** from the
