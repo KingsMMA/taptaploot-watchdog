@@ -1,0 +1,14 @@
+# Never publish reverse-engineered game code or copied game binaries
+decompiled/
+Managed/
+*.dll
+*.pdb
+
+# Local runtime artifacts
+watchdog.log
+
+# OS / editor cruft
+Thumbs.db
+desktop.ini
+.DS_Store
+.vs/
