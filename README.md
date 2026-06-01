@@ -77,6 +77,15 @@ Double-click **`Uninstall.bat`** (removes the task/shortcut and all files).
 - It only ever **restarts games that are already running** — if neither is open,
   it does nothing.
 - It does **not** touch your save files or game install; it just closes and
-  relaunches the processes through Steam.
+  relaunches the game.
+- **No Steam launch popup:** it relaunches the game's `.exe` directly with the
+  `SteamAppId` environment variable set, so the game doesn't bounce itself back
+  through Steam (which would show the focus-stealing "preparing to launch"
+  dialog). Steam stays running, so Steam Cloud and the overlay still work. If the
+  exe path can't be read for some reason, it falls back to `steam://` (which does
+  show the popup).
+- **Focus is handed back:** the game window grabs focus when it relaunches, so the
+  watchdog remembers whatever window you were using and restores it a few seconds
+  later — unless you were actually in the game at the time.
 - Editing which games are watched: change the `$targets` list near the top of
   `watchdog.ps1` (in the install folder), or edit the installer and re-run it.

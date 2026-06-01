@@ -130,37 +130,119 @@ $targets = @(
     @{ Name = 'Bongo Cat';    Process = 'BongoCat';   AppId = 3419430 }
 )
 
+# Win32 helpers so we can put YOUR previous window back in front after a restart
+# (the game grabs focus when it launches).  Best-effort; failures are ignored.
+$script:HasFocusApi = $false
+try {
+    Add-Type -ErrorAction Stop -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+namespace TtlWd {
+  public static class Win {
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool attach);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    public static uint PidOf(IntPtr h){ uint p; GetWindowThreadProcessId(h, out p); return p; }
+    public static void Restore(IntPtr h){
+      if (h == IntPtr.Zero || !IsWindow(h)) return;
+      IntPtr fg = GetForegroundWindow();
+      uint dummy;
+      uint t1 = GetWindowThreadProcessId(fg, out dummy);
+      uint t2 = GetWindowThreadProcessId(h, out dummy);
+      uint me = GetCurrentThreadId();
+      AttachThreadInput(t1, me, true); AttachThreadInput(t2, me, true);
+      BringWindowToTop(h); SetForegroundWindow(h);
+      AttachThreadInput(t1, me, false); AttachThreadInput(t2, me, false);
+    }
+  }
+}
+"@
+    $script:HasFocusApi = $true
+} catch { $script:HasFocusApi = $false }
+
+function Restart-One {
+    param($t, [bool]$Dry)
+    $procs = @(Get-Process -Name $t.Process -ErrorAction SilentlyContinue)
+    if ($procs.Count -eq 0) { Log "$($t.Name): not running - skip."; return $false }
+
+    Log "$($t.Name): running (PID $($procs.Id -join ',')) - restarting."
+    if ($Dry) { Log "$($t.Name): [DryRun] would restart."; return $true }
+
+    # Remember the exe path BEFORE closing, so we can relaunch it directly.
+    $exe = $null
+    try { $exe = $procs[0].Path } catch { }
+
+    # Graceful close so the game runs its normal save-on-quit.
+    foreach ($p in $procs) { $null = $p.CloseMainWindow() }
+
+    # Wait up to 25s for a clean exit (lets the game save + Steam Cloud sync).
+    $deadline = (Get-Date).AddSeconds(25)
+    while ((Get-Process -Name $t.Process -ErrorAction SilentlyContinue) -and ((Get-Date) -lt $deadline)) {
+        Start-Sleep -Milliseconds 500
+    }
+
+    # Force-kill only if it refused to close.
+    $still = @(Get-Process -Name $t.Process -ErrorAction SilentlyContinue)
+    if ($still.Count -gt 0) {
+        Log "$($t.Name): did not close in time - force killing."
+        $still | Stop-Process -Force
+        Start-Sleep -Seconds 2
+    }
+
+    if ($exe -and (Test-Path $exe)) {
+        # Launch the exe directly with SteamAppId/SteamGameId set.  This makes the
+        # game's SteamAPI.RestartAppIfNecessary() return false, so it runs straight
+        # away WITHOUT Steam's focus-stealing "preparing to launch" popup.  Steam is
+        # already running, so Steam Cloud / overlay still work.
+        $env:SteamAppId  = "$($t.AppId)"
+        $env:SteamGameId = "$($t.AppId)"
+        try { Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) } catch { }
+        Remove-Item Env:\SteamAppId  -ErrorAction SilentlyContinue
+        Remove-Item Env:\SteamGameId -ErrorAction SilentlyContinue
+        Log "$($t.Name): relaunched directly (no Steam popup): $exe"
+    }
+    else {
+        # Fallback if we couldn't read the exe path (shows the Steam popup).
+        Start-Process "steam://rungameid/$($t.AppId)"
+        Log "$($t.Name): exe path unknown - relaunched via steam://rungameid/$($t.AppId)."
+    }
+    Start-Sleep -Seconds 3
+    return $true
+}
+
 function Invoke-Check {
     param([bool]$Dry)
     Log "--- tick (DryRun=$Dry) ---"
+
+    # Capture the window you're currently using, so we can hand focus back after.
+    $prevWin = [IntPtr]::Zero; $prevPid = 0
+    if (-not $Dry -and $script:HasFocusApi) {
+        try { $prevWin = [TtlWd.Win]::GetForegroundWindow(); $prevPid = [TtlWd.Win]::PidOf($prevWin) } catch { }
+    }
+
+    $restarted = $false
+    $gamePids  = @()
     foreach ($t in $targets) {
-        $procs = @(Get-Process -Name $t.Process -ErrorAction SilentlyContinue)
-        if ($procs.Count -eq 0) { Log "$($t.Name): not running - skip."; continue }
+        $gamePids += @(Get-Process -Name $t.Process -ErrorAction SilentlyContinue).Id
+        if (Restart-One $t $Dry) { $restarted = $true }
+    }
 
-        Log "$($t.Name): running (PID $($procs.Id -join ',')) - restarting."
-        if ($Dry) { Log "$($t.Name): [DryRun] would close + relaunch via steam://rungameid/$($t.AppId)."; continue }
-
-        # Graceful close so the game runs its normal save-on-quit.
-        foreach ($p in $procs) { $null = $p.CloseMainWindow() }
-
-        # Wait up to 25s for a clean exit (lets the game save + Steam Cloud sync).
-        $deadline = (Get-Date).AddSeconds(25)
-        while ((Get-Process -Name $t.Process -ErrorAction SilentlyContinue) -and ((Get-Date) -lt $deadline)) {
-            Start-Sleep -Milliseconds 500
-        }
-
-        # Force-kill only if it refused to close.
-        $still = @(Get-Process -Name $t.Process -ErrorAction SilentlyContinue)
-        if ($still.Count -gt 0) {
-            Log "$($t.Name): did not close in time - force killing."
-            $still | Stop-Process -Force
-            Start-Sleep -Seconds 2
-        }
-
-        # Relaunch through Steam (preserves cloud saves + overlay; starts Steam if needed).
-        Start-Process "steam://rungameid/$($t.AppId)"
-        Log "$($t.Name): relaunched via steam://rungameid/$($t.AppId)."
-        Start-Sleep -Seconds 3
+    # If you were working in some OTHER window, put it back in front (the game's
+    # window will have stolen focus while launching).  Skip if you were in the game.
+    if ($restarted -and -not $Dry -and $script:HasFocusApi -and $prevWin -ne [IntPtr]::Zero) {
+        Start-Sleep -Seconds 4   # let the game window appear & grab focus first
+        try {
+            if (([TtlWd.Win]::IsWindow($prevWin)) -and ($gamePids -notcontains $prevPid)) {
+                [TtlWd.Win]::Restore($prevWin)
+                Log "focus: restored your previous window."
+            } else {
+                Log "focus: previous window was a restarted game (or gone) - left as-is."
+            }
+        } catch { Log "focus: restore attempt failed (ignored)." }
     }
     Log "--- tick done ---"
 }
