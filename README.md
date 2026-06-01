@@ -9,8 +9,11 @@ Watches both **Tap Tap Loot** (`appid 3959890`) and **Bongo Cat** (`appid 341943
 
 ## Install
 
-1. Copy this whole folder to the PC (USB stick, OneDrive, etc.).
-2. Double-click **`Install.bat`**.
+**Easiest (single file):** download **`Install-TapTapLootWatchdog.bat`** from the
+[latest release](../../releases/latest) and double-click it. That one file contains
+everything — no other downloads needed.
+
+**Or from a clone of this repo:** double-click **`Install.bat`**.
 
 That's it. No admin needed.
 
